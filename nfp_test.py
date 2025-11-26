@@ -3,7 +3,7 @@ from tools.geofunc import GeoFunc
 from tools.nfp import NFP
 import pandas as pd
 
-# 计算NFP然后寻找最合适位置
+# Compute NFP and find the best feasible placement point
 def tryNFP():
     df = pd.read_csv("data/blaz1.csv")
 
