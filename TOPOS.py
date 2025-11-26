@@ -1,9 +1,11 @@
 """
-该文件实现了主要基于序列的排样算法
+This module implements a TOPOS-style sequential packing algorithm.
 -----------------------------------
 Created on Wed Dec 11, 2019
-@author: seanys,prinway
+Authors: seanys, prinway
 -----------------------------------
+The TOPOS algorithm places polygons one by one and moves them as a whole. This implementation references Bennell's TOPOS Revised.
+Note: mid-line cases and some edge cases may still have bugs.
 """
 from tools.geofunc import GeoFunc
 from tools.show import PltFunc
@@ -23,8 +25,9 @@ import copy
 
 class TOPOS(object):
     '''
-    TOPOS启发式算法：将形状一个个放入，动态移动整体的位置，该算法参考Bennell的TOPOS Revised
-    问题：中线情况、好像有一些bug
+    TOPOS greedy algorithm: insert polygons one by one and move the whole set.
+    This implementation refers to Bennell's TOPOS (Revised).
+    Note: some mid-line cases may contain bugs.
     '''
     def __init__(self,original_polys,width):
         self.polys=original_polys
@@ -35,56 +38,55 @@ class TOPOS(object):
         self.run()
 
     def run(self):
-        self.cur_polys.append(GeoFunc.getSlide(self.polys[0],1000,1000)) # 加入第一个形状
-        self.border_left,self.border_right,self.border_bottom,self.border_top=0,0,0,0 # 初始化包络长方形
+        self.cur_polys.append(GeoFunc.getSlide(self.polys[0],1000,1000)) # insert the first polygon
+        self.border_left,self.border_right,self.border_bottom,self.border_top=0,0,0,0 # initialize bounding box
         self.border_height,self.border_width=0,0
         for i in range(1,len(self.polys)):
-            # 更新所有的边界情况
+            # update overall bounding box
             self.updateBound()
 
-            # 计算NFP的合并情况
+            # compute union of NFPs with current placed polygons
             feasible_border=Polygon(self.cur_polys[0])
             for fixed_poly in self.cur_polys:
                 nfp=self.NFPAssistant.getDirectNFP(fixed_poly,self.polys[i])
                 feasible_border=feasible_border.union(Polygon(nfp))
             
-            # 获得所有可行的点
+            # get all feasible placement points
             feasible_point=self.chooseFeasiblePoint(feasible_border)
             
-            # 获得形状的左右侧宽度
+            # get left/right/top/bottom extents of the polygon
             poly_left_pt,poly_bottom_pt,poly_right_pt,poly_top_pt=GeoFunc.checkBoundPt(self.polys[i])
             poly_left_width,poly_right_width=poly_top_pt[0]-poly_left_pt[0],poly_right_pt[0]-poly_top_pt[0]
 
-            # 逐一遍历NFP上的点，选择可行且宽度变化最小的位置
+            # iterate through feasible points and choose the one with minimal width change
             min_change=999999999999
             target_position=[]
             for pt in feasible_point:
                 change=min_change
                 if pt[0]-poly_left_width>=self.border_left and pt[0]+poly_right_width<=self.border_right:
-                    # 形状没有超出边界，此时min_change为负
+                    # polygon does not exceed current borders; set min_change accordingly
                     change=min(self.border_left-pt[0],self.border_left-pt[0])
                 elif min_change>0:
-                    # 形状超出了左侧或右侧边界，若变化大于0，则需要选择左右侧变化更大的值
+                    # polygon exceeds left or right border; compute required expansion
                     change=max(self.border_left-pt[0]+poly_left_width,pt[0]+poly_right_width-self.border_right)
                 else:
-                    # 有超出且min_change<=0的时候不需要改变
+                    # already exceeding and min_change <= 0, no change needed
                     pass
 
                 if change<min_change:
                     min_change=change
                     target_position=pt
             
-            # 平移到最终的位置
+            # slide polygon to final position
             reference_point=self.polys[i][GeoFunc.checkTop(self.polys[i])]
             self.cur_polys.append(GeoFunc.getSlide(self.polys[i],target_position[0]-reference_point[0],target_position[1]-reference_point[1]))
 
         self.slideToBottomLeft()
         self.showResult()
 
-    
     def updateBound(self):
         '''
-        更新包络长方形
+        Update bounding box extents
         '''
         border_left,border_bottom,border_right,border_top=GeoFunc.checkBoundValue(self.cur_polys[-1])
         if border_left<self.border_left:
@@ -99,7 +101,7 @@ class TOPOS(object):
         self.border_width=self.border_right-self.border_left
     
     def chooseFeasiblePoint(self,border):
-        '''选择可行的点'''
+        '''Select feasible placement points from a polygonal border'''
         res=mapping(border)
         _arr=[]
         if res["type"]=="MultiPolygon":
@@ -112,45 +114,39 @@ class TOPOS(object):
     
     def feasiblePoints(self,poly):
         '''
-        1. 将Polygon对象转化为点
-        2. 超出Width范围的点排除
-        3. 直线与边界的交点选入
+        1. Convert a Polygon to a list of candidate points
+        2. Remove points that exceed the width bounds
+        3. Select intersection points between straight edges and the border
         '''
         result=[]
         for pt in poly:
-            # (1) 超出了上侧&总宽度没有超过
+            # (1) candidate is above current top and total height within allowed width
             feasible1=pt[1]-self.border_top>0 and pt[1]-self.border_top+self.border_height<=self.width
-            # (2) 超过了下侧&总宽度没有超过
+            # (2) candidate is below current bottom and total height within allowed width
             feasible2=self.border_bottom-pt[1]>0 and self.border_bottom-pt[1]+self.border_heigt<=self.width
-            # (3) Top和bottom的内部
+            # (3) point is inside current top/bottom
             feasible3=pt[1]<=self.border_top and pt[1]>=self.border_bottom
             if feasible1==True or feasible2==True or feasible3==True:
                 result.append([pt[0],pt[1]])
         return result
 
     def slideToBottomLeft(self):
-        '''移到最左下角位置'''
+        '''Slide the layout to the bottom-left origin'''
         for poly in self.cur_polys:
             GeoFunc.slidePoly(poly,-self.border_left,-self.border_bottom)
 
     def showResult(self):
-        '''显示排样结果'''
+        '''Display the placement result'''
         for poly in self.cur_polys:
             PltFunc.addPolygon(poly)
         PltFunc.showPlt(width=2000,height=2000)
 
-    
+
 if __name__=='__main__':
     # index from 0-15
     index=6
     polys=getData(index)
-    # nfp_ass=packing.NFPAssistant(polys,store_nfp=True,get_all_nfp=True,load_history=False)
-    # nfp_ass=packing.NFPAssistant(polys,store_nfp=False,get_all_nfp=True,load_history=True)
-    # nfp_ass=packing.NFPAssistant(polys,store_nfp=False,get_all_nfp=False,load_history=False)
-
     starttime = datetime.datetime.now()
-    # bfl=BottomLeftFill(2000,polys,vertical=False)
     topos = TOPOS(polys,760)
-    
     endtime = datetime.datetime.now()
     print ("total time: ",endtime - starttime)
